@@ -1,0 +1,76 @@
+; USB sniffing using PIO
+; (Only for Full-Speed communications)
+; References:
+;   USB Made Simple, Part 3 - Data Flow, https://www.usbmadesimple.co.uk/ums_3.htm
+;   USB (Communications) - Wikipedia, https://en.wikipedia.org/w/index.php?title=USB_(Communications)&oldid=1071371871
+
+; Input 0 is D+.
+; Input 1 is D-.
+
+; PIO program for decoding NRZI signal of USB
+; Register X is temporary variable.
+; Register Y is counter for bit de-stuffing.
+; Output Shift Register (OSR) is used to store state of input pins, instead of original purpose.
+.program usb_sniff
+
+.wrap_target
+    ; Program starts from idle (J) state (D+ high, D- low)
+    ; Wait for start of packet
+    ; t=N indicates N clocks after the beginning of a bit
+    wait 0 pin, 0           ; (t=0) Wait until Input 0 (D+) becomes low i.e. K state (SYNC pattern always starts with K)
+    set y, 6 [3]            ; (t=1) Reset counter of consecutive 1
+
+from_j:
+    ; Previous state was J (D+ high, D- low)
+    mov osr, pins           ; (t=5) Store pin state in OSR
+    out x, 2                ; (t=6) Copy pin state form OSR to X. D+ is bit 0 and D- is bit 1. Note: 'mov x, pins' does not work because it reads all input pins, not only D+ and D-.
+    jmp !x end_of_packet    ; (t=7) Check SE0 (both D+ and D- is low)
+    jmp x-- from_j_check    ; (t=8) Decrement X. if X is 0b01 (D- low, D+ high, i.e. J), new X becomes 0.
+from_j_check:
+    jmp !x j_to_j           ; (t=9) If X is still non-zero, X before decrement was 0b10 (D- high, D+ low, i.e. K)
+j_to_k:
+    ; Transition indicates 0
+    nop;jmp !y ignore_j_to_k    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
+    set y, 6                ; (t=1) Reset counter of consecutive 1
+    in null, 1              ; (t=2) Shift 0 into ISR
+    jmp from_k [1]          ; (t=3)
+ignore_j_to_k:
+    ; Ignore stuffed extra bit
+    set y, 6                ; (t=1) Reset counter of consecutive 1
+    jmp from_k [2]          ; (t=2)
+j_to_j:
+    ; No transition indicates 1
+    set x, 1                ; (t=0)
+    in x, 1                 ; (t=1) Shift 1 into ISR
+    jmp y-- from_j [2]      ; (t=2) Decrement Y. Because Y won't be 0 before this instruction, always jumps.
+
+from_k:
+    ; Previous state was K (D+ low, D- high)
+    mov osr, pins           ; (t=5) Store pin state in OSR
+    out x, 2                ; (t=6) Copy pin state form OSR to X. D+ is bit 0 and D- is bit 1. Note: 'mov x, pins' does not work because it reads all input pins, not only D+ and D-.
+    jmp !x end_of_packet    ; (t=7) Check SE0 (both D+ and D- is low)
+    jmp x-- from_k_check    ; (t=8) Decrement X. if X is 0b01 (D- low, D+ high, i.e. J), new X becomes 0.
+from_k_check:
+    jmp !x k_to_j           ; (t=9) If X is still non-zero, X before decrement was 0b10 (D- high, D+ low, i.e. K)
+k_to_k:
+    ; No transition indicates 1
+    set x, 1                ; (t=0)
+    in x, 1                 ; (t=1): Shift 1 into ISR
+    jmp y-- from_k [2]      ; (t=2): Decrement Y. Because Y won't be 0 before this instruction, always jumps.
+k_to_j:
+    ; Transition indicates 0
+    nop;jmp !y ignore_k_to_j    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
+    set y, 6                ; (t=1) Reset counter of consecutive 1
+    in null, 1              ; (t=2) Shift 0 into the Input Shift Register (ISR)
+    jmp from_j [1]          ; (t=3)
+ignore_k_to_j:
+    ; Ignore stuffed extra bit
+    set y, 6                ; (t=1) Reset counter of consecutive 1
+    jmp from_j [2]          ; (t=2)
+
+end_of_packet:
+    ; SE0 indicates End of Packet
+    irq 0                   ; (t=8) Set IRQ0 to indicate current packet is ended
+    wait 1 pin, 0           ; (t=9) Wait until idle (J) state i.e. Input 0 (D+) becomes high
+    ; Jump to the beginning
+.wrap
