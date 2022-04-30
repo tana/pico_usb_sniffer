@@ -30,7 +30,7 @@ from_j_check:
     jmp !x j_to_j           ; (t=9) If X is still non-zero, X before decrement was 0b10 (D- high, D+ low, i.e. K)
 j_to_k:
     ; Transition indicates 0
-    nop;jmp !y ignore_j_to_k    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
+    jmp !y ignore_j_to_k    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
     set y, 6                ; (t=1) Reset counter of consecutive 1
     in null, 1              ; (t=2) Shift 0 into ISR
     jmp from_k [1]          ; (t=3)
@@ -59,7 +59,7 @@ k_to_k:
     jmp y-- from_k [2]      ; (t=2): Decrement Y. Because Y won't be 0 before this instruction, always jumps.
 k_to_j:
     ; Transition indicates 0
-    nop;jmp !y ignore_k_to_j    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
+    jmp !y ignore_k_to_j    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
     set y, 6                ; (t=1) Reset counter of consecutive 1
     in null, 1              ; (t=2) Shift 0 into the Input Shift Register (ISR)
     jmp from_j [1]          ; (t=3)

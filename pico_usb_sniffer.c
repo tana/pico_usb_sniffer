@@ -26,7 +26,7 @@
 
 #define USB_MAX_PACKET_LEN 1028 // Max length of a packet including sync pattern, PID, and CRC
 
-#define USB_SYNC 0x01   // USB sync pattern before NRZI encoding
+#define USB_SYNC 0x80   // USB sync pattern before NRZI encoding (because USB is LSB-first, actual bit sequence is reversed)
 
 // This structure represents position of a packet in capture_buf
 typedef struct {
@@ -164,13 +164,11 @@ void core1_main()
     if (pio_sm_is_rx_fifo_full(pio, sm)) {
       gpio_put(LED_PIN, true);
       panic("RX FIFO full\n");
-    } else {
-      gpio_put(LED_PIN, false);
-    }
-
-    if (dma_hw->ch[dma_chan].ctrl_trig & 0x8000) {
+    } else if (dma_hw->ch[dma_chan].ctrl_trig & 0x80000000) {
       gpio_put(LED_PIN, true);
       panic("DMA bus error\n");
+    } else {
+      gpio_put(LED_PIN, false);
     }
   }
 }
@@ -198,7 +196,11 @@ int main()
     uint8_t second_byte = capture_buf[(packet.start_pos + 1) % CAPTURE_BUF_LEN] >> 24;
 
     if (first_byte != USB_SYNC) {
-      printf("no sync %02X %02X len=%d\n", first_byte, second_byte, packet.len);
+      printf("no sync ");
+      for (int i = 0; i < packet.len; i++) {
+        printf("%02X ", capture_buf[(packet.start_pos + i) % CAPTURE_BUF_LEN] >> 24);
+      }
+      printf("\n");
       continue; // Skip invalid packet which does not start with sync pattern
     }
 
