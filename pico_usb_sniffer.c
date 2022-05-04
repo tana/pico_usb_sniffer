@@ -3,6 +3,7 @@
 // References:
 //   USB Made Simple, Part 3 - Data Flow, https://www.usbmadesimple.co.uk/ums_3.htm
 //   USB (Communications) - Wikipedia, https://en.wikipedia.org/w/index.php?title=USB_(Communications)&oldid=1071371871
+//   USB 2.0 Specification, https://www.usb.org/document-library/usb-20-specification
 
 #include <stdio.h>
 #include <malloc.h>
@@ -46,6 +47,7 @@ uint32_t *packet_start_addr;
 
 // PIO instance used for USB sniffing
 PIO sniff_pio;
+uint sniff_sm;
 
 // Number of DMA channel used for capturing
 uint capture_dma_chan;
@@ -53,7 +55,7 @@ uint capture_dma_chan;
 // Called when End of Packet is detected
 void handle_eop_interrupt()
 {
-  pio_interrupt_clear(sniff_pio, pis_interrupt0);
+  pio_interrupt_clear(sniff_pio, pis_interrupt0 + sniff_sm);
 
   // Get current destination address of the DMA channel
   uint32_t *next_addr = (uint32_t*)(dma_hw->ch[capture_dma_chan].write_addr);
@@ -112,6 +114,7 @@ void usb_sniff_program_init(PIO pio, uint sm, uint offset, uint dp_pin, uint dma
 
   // Store some variables for use in interrupt handlers
   sniff_pio = pio;
+  sniff_sm = sm;
   capture_dma_chan = dma_chan;
   packet_start_addr = capture_buf;
 
@@ -140,7 +143,7 @@ void usb_sniff_program_init(PIO pio, uint sm, uint offset, uint dp_pin, uint dma
   dma_channel_start(dma_chan);  // Start DMA
 
   // Configure interrupt on End of Packet
-  pio_set_irq0_source_enabled(pio, pis_interrupt0, true); // IRQ 0 from PIO SM generates system interrupt
+  pio_set_irq0_source_enabled(pio, pis_interrupt0 + sniff_sm, true); // IRQ 0 from PIO SM generates system interrupt
   uint interrupt_num = (pio_get_index(pio) == 0) ? PIO0_IRQ_0 : PIO1_IRQ_0;
   irq_set_exclusive_handler(interrupt_num, handle_eop_interrupt); // Interrupt handler runs on current core
   irq_set_enabled(interrupt_num, true);
@@ -204,6 +207,11 @@ int main()
       continue; // Skip invalid packet which does not start with sync pattern
     }
 
+    if (packet.len == 1) {
+      printf("%02X len=1\n", first_byte);
+      continue;
+    }
+
     // First 4 bits of the second byte are bit-inversion of PID, and the rest are PID itself.
     if (((~(second_byte >> 4)) & 0xF) == (second_byte & 0xF)) {
       uint32_t pid = second_byte & 0xF;
@@ -219,6 +227,15 @@ int main()
         break;
       case 0xD:
         printf("SETUP ");
+        break;
+      case 0x2:
+        printf("ACK ");
+        break;
+      case 0xA:
+        printf("NAK ");
+        break;
+      case 0xE:
+        printf("STALL ");
         break;
       case 0x3:
         printf("DATA0 ");

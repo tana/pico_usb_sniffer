@@ -3,6 +3,7 @@
 ; References:
 ;   USB Made Simple, Part 3 - Data Flow, https://www.usbmadesimple.co.uk/ums_3.htm
 ;   USB (Communications) - Wikipedia, https://en.wikipedia.org/w/index.php?title=USB_(Communications)&oldid=1071371871
+;   USB 2.0 Specification, https://www.usb.org/document-library/usb-20-specification
 
 ; Input 0 is D+.
 ; Input 1 is D-.
@@ -17,8 +18,9 @@
     ; Program starts from idle (J) state (D+ high, D- low)
     ; Wait for start of packet
     ; t=N indicates N clocks after the beginning of a bit
-    wait 0 pin, 0           ; (t=0) Wait until Input 0 (D+) becomes low i.e. K state (SYNC pattern always starts with K)
-    set y, 6 [3]            ; (t=1) Reset counter of consecutive 1
+    wait 0 pin, 0           ; (t=-1) Wait until Input 0 (D+) becomes low i.e. K state (SYNC pattern always starts with K)
+    mov isr, null           ; (t=0)
+    set y, 5 [3]            ; (t=1) Reset counter of consecutive 1
 
 from_j:
     ; Previous state was J (D+ high, D- low)
@@ -30,19 +32,17 @@ from_j_check:
     jmp !x j_to_j           ; (t=9) If X is still non-zero, X before decrement was 0b10 (D- high, D+ low, i.e. K)
 j_to_k:
     ; Transition indicates 0
-    jmp !y ignore_j_to_k    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
-    set y, 6                ; (t=1) Reset counter of consecutive 1
-    in null, 1              ; (t=2) Shift 0 into ISR
-    jmp from_k [1]          ; (t=3)
-ignore_j_to_k:
-    ; Ignore stuffed extra bit
-    set y, 6                ; (t=1) Reset counter of consecutive 1
+    set y, 5                ; (t=0) Reset counter of consecutive 1
+    in null, 1              ; (t=1) Shift 0 into ISR
     jmp from_k [2]          ; (t=2)
 j_to_j:
     ; No transition indicates 1
     set x, 1                ; (t=0)
     in x, 1                 ; (t=1) Shift 1 into ISR
-    jmp y-- from_j [2]      ; (t=2) Decrement Y. Because Y won't be 0 before this instruction, always jumps.
+    jmp y-- from_j [2]      ; (t=2) Decrement Y and loop.
+    ; Instructions below runs if Y before decrement was 0 (i.e. received sixth consecutive 1).
+    set y, 5                ; (t=5) Reset counter
+    jmp from_k [8]          ; (t=6) Skip the next K state which constitutes an extra stuffed bit
 
 from_k:
     ; Previous state was K (D+ low, D- high)
@@ -55,17 +55,15 @@ from_k_check:
 k_to_k:
     ; No transition indicates 1
     set x, 1                ; (t=0)
-    in x, 1                 ; (t=1): Shift 1 into ISR
-    jmp y-- from_k [2]      ; (t=2): Decrement Y. Because Y won't be 0 before this instruction, always jumps.
+    in x, 1                 ; (t=1) Shift 1 into ISR
+    jmp y-- from_k [2]      ; (t=2) Decrement Y.
+    ; Instructions below runs if Y before decrement was 0 (i.e. received sixth consecutive 1).
+    set y, 5                ; (t=5) Reset counter
+    jmp from_j [8]          ; (t=6) Skip the next J state which constitutes an extra stuffed bit
 k_to_j:
     ; Transition indicates 0
-    jmp !y ignore_k_to_j    ; (t=0) When y=0, this is an extra bit from bit stuffing which has to be ignored
-    set y, 6                ; (t=1) Reset counter of consecutive 1
-    in null, 1              ; (t=2) Shift 0 into the Input Shift Register (ISR)
-    jmp from_j [1]          ; (t=3)
-ignore_k_to_j:
-    ; Ignore stuffed extra bit
-    set y, 6                ; (t=1) Reset counter of consecutive 1
+    set y, 6                ; (t=0) Reset counter of consecutive 1
+    in null, 1              ; (t=1) Shift 0 into the Input Shift Register (ISR)
     jmp from_j [2]          ; (t=2)
 
 end_of_packet:
