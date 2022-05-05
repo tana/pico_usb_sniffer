@@ -4,6 +4,7 @@
 ;   USB Made Simple, Part 3 - Data Flow, https://www.usbmadesimple.co.uk/ums_3.htm
 ;   USB (Communications) - Wikipedia, https://en.wikipedia.org/w/index.php?title=USB_(Communications)&oldid=1071371871
 ;   USB 2.0 Specification, https://www.usb.org/document-library/usb-20-specification
+;   Pico-PIO_USB, https://github.com/sekigon-gonnoc/Pico-PIO-USB
 
 ; Input 0 is D+.
 ; Input 1 is D-.
@@ -68,7 +69,8 @@ k_to_j:
 
 end_of_packet:
     ; SE0 indicates End of Packet
-    irq 0                   ; (t=8) Set IRQ0 to indicate current packet is ended
-    wait 1 pin, 0           ; (t=9) Wait until idle (J) state i.e. Input 0 (D+) becomes high
+    mov isr, ~ null         ; (t=8) Fill ISR with all ones (0xFFFFFFFF), which does not appear in normal data (normal data uses only 8 MSBs)
+    push                    ; (t=9) Push it into FIFO
+    wait 1 pin, 0           ; (t=0) Wait until idle (J) state i.e. Input 0 (D+) becomes high
     ; Jump to the beginning
 .wrap

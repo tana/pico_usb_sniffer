@@ -4,6 +4,7 @@
 //   USB Made Simple, Part 3 - Data Flow, https://www.usbmadesimple.co.uk/ums_3.htm
 //   USB (Communications) - Wikipedia, https://en.wikipedia.org/w/index.php?title=USB_(Communications)&oldid=1071371871
 //   USB 2.0 Specification, https://www.usb.org/document-library/usb-20-specification
+//   Pico-PIO_USB, https://github.com/sekigon-gonnoc/Pico-PIO-USB
 
 #include <stdio.h>
 #include <malloc.h>
@@ -36,57 +37,18 @@ typedef struct {
 } packet_pos_t;
 
 // Ring buffer which stores data of received packets
-// Actual data is only 8 bits but store all 32 bits in the RX FIFO of PIO.
-// This is inefficient (consumes 4x memory), but this is necessary due to restriction of DMA.
+// We use 32 bits to store one byte of received data, because 0xFFFFFFFF is used to represent an End of Packet (EOP).
 uint32_t capture_buf[CAPTURE_BUF_LEN];
 // For transmission of packet_pos_t from Core 1 to Core 0
 queue_t packet_queue;
 
-// Start address of currently capturing packet
-uint32_t *packet_start_addr;
-
-// PIO instance used for USB sniffing
-PIO sniff_pio;
-uint sniff_sm;
-
 // Number of DMA channel used for capturing
 uint capture_dma_chan;
-
-// Called when End of Packet is detected
-void handle_eop_interrupt()
-{
-  pio_interrupt_clear(sniff_pio, pis_interrupt0 + sniff_sm);
-
-  // Get current destination address of the DMA channel
-  uint32_t *next_addr = (uint32_t*)(dma_hw->ch[capture_dma_chan].write_addr);
-
-  // printf("%p %p\n", packet_start_addr, next_addr);
-
-  if (next_addr != packet_start_addr) { // Skip if no data is captured (probably no USB device is connected)
-    // The following two variables are numbers of uint32_t, not bytes.
-    // (Subtracting a pointer from a pointer becomes number of elements, not bytes)
-    uint start_pos = packet_start_addr - capture_buf;
-    uint next_pos = next_addr - capture_buf;
-
-    packet_pos_t packet_pos = {
-      .start_pos = start_pos,
-      .len = (next_pos > start_pos)
-              ? (next_pos - start_pos)
-              : ((CAPTURE_BUF_LEN - start_pos) + next_pos)
-    };
-    // printf("%p %p %p %d %d %d\n", capture_buf, packet_start_addr, next_addr, start_pos, next_pos, packet_pos.len);
-
-    packet_start_addr = next_addr;
-
-    queue_add_blocking(&packet_queue, &packet_pos); // Copy packet_pos and send to Core 0
-  }
-}
 
 // Called when DMA completes transfer of data whose amount is specified in its setting
 void handle_dma_complete_interrupt()
 {
   dma_channel_acknowledge_irq0(capture_dma_chan);
-  // printf("DMA finish\n");
   dma_channel_set_write_addr(capture_dma_chan, capture_buf, true);  // Restart DMA
 }
 
@@ -112,11 +74,8 @@ void usb_sniff_program_init(PIO pio, uint sm, uint offset, uint dp_pin, uint dma
 
   pio_sm_init(pio, sm, offset, &conf);  // Initialize the state machine with the config created above
 
-  // Store some variables for use in interrupt handlers
-  sniff_pio = pio;
-  sniff_sm = sm;
+  // Store DMA channel number for use in interrupt handlers
   capture_dma_chan = dma_chan;
-  packet_start_addr = capture_buf;
 
   // DMA configuration
   dma_channel_config chan_conf = dma_channel_get_default_config(dma_chan);
@@ -137,16 +96,10 @@ void usb_sniff_program_init(PIO pio, uint sm, uint offset, uint dp_pin, uint dma
   // It is used to make DMA run forever and implement a ring buffer
   dma_channel_set_irq0_enabled(dma_chan, true); // DMA_IRQ_0 is fired when DMA completes
   irq_set_exclusive_handler(DMA_IRQ_0, handle_dma_complete_interrupt);  // Handler runs on current core
-  irq_set_priority(DMA_IRQ_0, 0); // DMA interrupt has the highest priority (higher than End of Packet interrupt)
+  irq_set_priority(DMA_IRQ_0, 0); // DMA interrupt has the highest priority
   irq_set_enabled(DMA_IRQ_0, true);
   
   dma_channel_start(dma_chan);  // Start DMA
-
-  // Configure interrupt on End of Packet
-  pio_set_irq0_source_enabled(pio, pis_interrupt0 + sniff_sm, true); // IRQ 0 from PIO SM generates system interrupt
-  uint interrupt_num = (pio_get_index(pio) == 0) ? PIO0_IRQ_0 : PIO1_IRQ_0;
-  irq_set_exclusive_handler(interrupt_num, handle_eop_interrupt); // Interrupt handler runs on current core
-  irq_set_enabled(interrupt_num, true);
 
   pio_sm_set_enabled(pio, sm, true);  // Start the state machine
 }
@@ -163,15 +116,24 @@ void core1_main()
   uint dma_chan = dma_claim_unused_channel(true);
   usb_sniff_program_init(pio, sm, offset, DP_PIN, dma_chan);
 
+  uint pos = 0;
+  uint packet_start_pos = 0;
+
   while (true) {
-    if (pio_sm_is_rx_fifo_full(pio, sm)) {
-      gpio_put(LED_PIN, true);
-      panic("RX FIFO full\n");
-    } else if (dma_hw->ch[dma_chan].ctrl_trig & 0x80000000) {
-      gpio_put(LED_PIN, true);
-      panic("DMA bus error\n");
-    } else {
-      gpio_put(LED_PIN, false);
+    while (&capture_buf[pos] != (uint32_t*)(dma_hw->ch[capture_dma_chan].write_addr)) {
+      if (capture_buf[pos] == 0xFFFFFFFF) { // When an EOP is detected
+        packet_pos_t packet_pos = {
+          .start_pos = packet_start_pos,
+          .len = (pos > packet_start_pos)
+                  ? (pos - packet_start_pos)
+                  : ((CAPTURE_BUF_LEN - packet_start_pos) + pos)
+        };
+        queue_add_blocking(&packet_queue, &packet_pos); // Copy packet_pos and send to Core 0
+
+        packet_start_pos = (pos + 1) % CAPTURE_BUF_LEN;
+      }
+
+      pos = (pos + 1) % CAPTURE_BUF_LEN;
     }
   }
 }
