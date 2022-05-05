@@ -8,6 +8,7 @@ pico_sdk_init()
 
 add_executable(pico_usb_sniffer
   pico_usb_sniffer.c
+  slip.c
 )
 
 pico_generate_pio_header(pico_usb_sniffer ${CMAKE_CURRENT_LIST_DIR}/usb_sniff.pio)
