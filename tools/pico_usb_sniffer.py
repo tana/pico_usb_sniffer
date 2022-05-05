@@ -113,7 +113,10 @@ SERIAL_PACKET_TYPE_USB = 0
 class Sniffer:
     def __init__(self, port_name, out_path):
         # Baudrate has no meaning because it is a virtual serial port on USB
-        self.serial = serial.Serial(port_name, timeout=0.3)
+        # Serial port must not have timeout, because SlipStream treats 0-length bytes from stream as the end of stream.
+        # (See: https://sliplib.readthedocs.io/en/master/module.html#slipwrapper )
+        # It still allows interrupting by Ctrl-C because SlipStream seems to use another thread for receiving.
+        self.serial = serial.Serial(port_name)
         self.slip_stream = sliplib.SlipStream(self.serial, chunk_size=1)
 
         self.pcap_file = PcapFileWriter(out_path, link_type=PCAP_LINKTYPE_USB_2_0)
