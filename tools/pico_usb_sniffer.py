@@ -110,6 +110,26 @@ class PcapFileWriter:
 
 SERIAL_PACKET_TYPE_USB = 0
 
+class SerialPacketHeader:
+    # Create a precompiled struct format as a class variable
+    struct = struct.Struct('<BI')
+
+    def __init__(self, type=SERIAL_PACKET_TYPE_USB, timestamp=0):
+        self.type = type
+        self.timestamp = timestamp
+    
+
+    @classmethod
+    def unpack_from(cls, buffer, offset=0):
+        type, timestamp = cls.struct.unpack_from(buffer, offset)
+        return cls(type, timestamp)
+
+
+    @classmethod
+    def unpack(cls, buffer):
+        return cls.unpack_from(buffer)
+
+
 class Sniffer:
     def __init__(self, port_name, out_path):
         # Baudrate has no meaning because it is a virtual serial port on USB
@@ -143,14 +163,14 @@ class Sniffer:
         while True:
             packet = self.slip_stream.recv_msg()
 
-            if len(packet) < 4:
+            if len(packet) < 1:
                 continue    # Wrong packet received from serial port (no packet type)
 
-            packet_type = struct.unpack_from('<I', packet, 0)[0]
+            packet_type = packet[0]
             if packet_type == SERIAL_PACKET_TYPE_USB:
-                timestamp = struct.unpack_from('<I', packet, 4)[0]
-                data = packet[8:]
-                self.pcap_file.write_packet(timestamp, data)
+                header = SerialPacketHeader.unpack_from(packet, 0)
+                data = packet[SerialPacketHeader.struct.size:]
+                self.pcap_file.write_packet(header.timestamp, data)
 
 
 if __name__ == '__main__':

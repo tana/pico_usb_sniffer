@@ -7,6 +7,6 @@ typedef enum {
 } serial_packet_type_t;
 
 typedef struct {
-  uint32_t type; // One of serial_packet_type_t
+  uint8_t type; // One of serial_packet_type_t
   uint32_t timestamp;   // Time in microseconds
-} serial_packet_header_t;
+} __attribute__((packed)) serial_packet_header_t;

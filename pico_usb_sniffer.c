@@ -194,7 +194,7 @@ int main()
     // TODO: packet filtering by PID
     
     serial_packet_header_t header = {
-      .type = SERIAL_PACKET_TYPE_USB,
+      .type = (uint8_t)SERIAL_PACKET_TYPE_USB,
       .timestamp = to_us_since_boot(get_absolute_time())  // Time is not actual capture time, but time of sending to PC
     };
 
