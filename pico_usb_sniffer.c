@@ -41,6 +41,7 @@
 typedef struct {
   uint start_pos;
   uint len;
+  absolute_time_t timestamp;
 } packet_pos_t;
 
 // Ring buffer which stores data of received packets
@@ -133,7 +134,8 @@ void core1_main()
           .start_pos = packet_start_pos,
           .len = (pos > packet_start_pos)
                   ? (pos - packet_start_pos)
-                  : ((CAPTURE_BUF_LEN - packet_start_pos) + pos)
+                  : ((CAPTURE_BUF_LEN - packet_start_pos) + pos),
+          .timestamp = get_absolute_time()
         };
         queue_add_blocking(&packet_queue, &packet_pos); // Copy packet_pos and send to Core 0
 
@@ -195,7 +197,7 @@ int main()
     
     serial_packet_header_t header = {
       .type = (uint8_t)SERIAL_PACKET_TYPE_USB,
-      .timestamp = to_us_since_boot(get_absolute_time())  // Time is not actual capture time, but time of sending to PC
+      .timestamp = to_us_since_boot(packet.timestamp)
     };
 
     memcpy(serial_packet, &header, sizeof(serial_packet_header_t));
