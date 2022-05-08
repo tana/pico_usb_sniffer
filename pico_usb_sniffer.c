@@ -53,6 +53,11 @@ queue_t packet_queue;
 // Number of DMA channel used for capturing
 uint capture_dma_chan;
 
+// Flags for PID filtering
+// If k-th bit is 1, packets with PID k are ignored (k is a 4-bit number)
+// By default (0), no PID is ignored
+uint pid_ignore_flags = 0;
+
 // Called when DMA completes transfer of data whose amount is specified in its setting
 void handle_dma_complete_interrupt()
 {
@@ -147,12 +152,96 @@ void core1_main()
   }
 }
 
+void process_usb_packet(packet_pos_t packet)
+{
+  static uint8_t serial_packet[SERIAL_MAX_PACKET_LEN];
+  static uint8_t encoded_packet[SLIP_MAX_ENCODED_LEN(SERIAL_MAX_PACKET_LEN)];
+
+  uint8_t first_byte = capture_buf[packet.start_pos] >> 24;
+
+  if (first_byte != USB_SYNC) {
+    gpio_put(LED_PIN, true);
+    return; // Skip invalid packet which does not start with sync pattern
+  }
+
+  if (packet.len == 1) {
+    gpio_put(LED_PIN, true);
+    return; // Skip invalid packet which has no content
+  }
+
+  uint8_t second_byte = capture_buf[(packet.start_pos + 1) % CAPTURE_BUF_LEN] >> 24;
+
+  // First 4 bits of the second byte are bit-inversion of PID, and the rest are PID itself.
+  if (((~(second_byte >> 4)) & 0xF) != (second_byte & 0xF)) {
+    gpio_put(LED_PIN, true);
+    return; // Skip invalid packet which has a broken PID byte (First 4 bits are not bit-inversion of the rest)
+  }
+
+  gpio_put(LED_PIN, false); // When a correct packet is received, turn off the LED
+
+  uint pid = second_byte & 0xF;
+  // Filter packet by PID
+  if ((pid_ignore_flags & (1 << pid)) != 0) {
+    return;
+  }
+  
+  // Prepare for sending to PC
+  serial_packet_header_t header = {
+    .type = (uint8_t)SERIAL_PACKET_TYPE_USB,
+    .timestamp = to_us_since_boot(packet.timestamp)
+  };
+
+  memcpy(serial_packet, &header, sizeof(serial_packet_header_t));
+
+  // Copy packet content excluding the first SYNC byte
+  for (int i = 1; i < packet.len; i++) {
+    serial_packet[sizeof(serial_packet_header_t) + i - 1] = capture_buf[(packet.start_pos + i) % CAPTURE_BUF_LEN] >> 24;
+  }
+
+  size_t encoded_len = slip_encode(serial_packet, sizeof(serial_packet_header_t) + packet.len - 1, encoded_packet);
+
+  // Send to PC
+  fwrite(encoded_packet, encoded_len, 1, stdout);
+  fflush(stdout);
+}
+
+void process_set_pid_filter_cmd(const uint8_t *buf, size_t len)
+{
+  if (len < sizeof(serial_set_pid_filter_cmd_t)) {
+    return; // Received data is too short
+  }
+
+  serial_set_pid_filter_cmd_t cmd = *(const serial_set_pid_filter_cmd_t*)buf;
+  
+  pid_ignore_flags = cmd.pid_ignore_flags;
+}
+
+void process_received_cmd(const uint8_t *buf, size_t len)
+{
+  if (len < 0) {
+    return; // Ignore zero-length command (something is wrong)
+  }
+
+  // Command type is always stored in first byte
+  switch (buf[0]) {
+  case SERIAL_CMD_TYPE_SET_PID_FILTER:
+    process_set_pid_filter_cmd(buf, len);
+    break;
+  default:
+    // Ignore undefined command
+    break;
+  }
+}
+
 int main()
 {
   // Change system clock to 120 MHz (10 times the frequency of USB Full Speed)
   set_sys_clock_khz(120000, true);
 
   stdio_usb_init();
+  // Disable CR/LF conversion built into stdio of Pico SDK.
+  // (Reference: https://forums.raspberrypi.com/viewtopic.php?t=305705 )
+  stdio_set_translate_crlf(&stdio_usb, false);
 
   // Initialize GPIO for error indicating LED
   gpio_init(LED_PIN);
@@ -162,55 +251,29 @@ int main()
 
   multicore_launch_core1(core1_main); // Start core1_main on another core
 
-  uint8_t serial_packet[SERIAL_MAX_PACKET_LEN];
-  uint8_t encoded_packet[SLIP_MAX_ENCODED_LEN(SERIAL_MAX_PACKET_LEN)];
+  static uint8_t cmd_recv_buf[SLIP_MAX_ENCODED_LEN(SERIAL_MAX_CMD_LEN)];  // Buffer for receiving command
+  static uint8_t decoded_cmd[SERIAL_MAX_CMD_LEN];
+  size_t cmd_recv_buf_pos = 0;
 
   while (true) {
     packet_pos_t packet;
     // Receive a packet from Core 1
-    queue_remove_blocking(&packet_queue, &packet);
-
-    uint8_t first_byte = capture_buf[packet.start_pos] >> 24;
-
-    if (first_byte != USB_SYNC) {
-      gpio_put(LED_PIN, true);
-      continue; // Skip invalid packet which does not start with sync pattern
+    if (queue_try_remove(&packet_queue, &packet)) {
+      process_usb_packet(packet);
     }
 
-    if (packet.len == 1) {
-      gpio_put(LED_PIN, true);
-      continue; // Skip invalid packet which has no content
+    // Handle commands sent from PC
+    int received_byte = getchar_timeout_us(0 /* no wait */);
+    if (received_byte != PICO_ERROR_TIMEOUT) {
+      cmd_recv_buf[cmd_recv_buf_pos] = received_byte;
+      cmd_recv_buf_pos++;
+
+      if (received_byte == SLIP_END) {
+        size_t decoded_cmd_len = slip_decode(cmd_recv_buf, cmd_recv_buf_pos, decoded_cmd);
+        process_received_cmd(decoded_cmd, decoded_cmd_len);
+
+        cmd_recv_buf_pos = 0;
+      }
     }
-
-    uint8_t second_byte = capture_buf[(packet.start_pos + 1) % CAPTURE_BUF_LEN] >> 24;
-
-    // First 4 bits of the second byte are bit-inversion of PID, and the rest are PID itself.
-    if (((~(second_byte >> 4)) & 0xF) != (second_byte & 0xF)) {
-      gpio_put(LED_PIN, true);
-      continue; // Skip invalid packet which has a broken PID byte (First 4 bits are not bit-inversion of the rest)
-    }
-
-    gpio_put(LED_PIN, false); // When a correct packet is received, turn off the LED
-
-    // uint32_t pid = second_byte & 0xF;
-    // TODO: packet filtering by PID
-    
-    serial_packet_header_t header = {
-      .type = (uint8_t)SERIAL_PACKET_TYPE_USB,
-      .timestamp = to_us_since_boot(packet.timestamp)
-    };
-
-    memcpy(serial_packet, &header, sizeof(serial_packet_header_t));
-
-    // Copy packet content excluding the first SYNC byte
-    for (int i = 1; i < packet.len; i++) {
-      serial_packet[sizeof(serial_packet_header_t) + i - 1] = capture_buf[(packet.start_pos + i) % CAPTURE_BUF_LEN] >> 24;
-    }
-
-    size_t encoded_len = slip_encode(serial_packet, sizeof(serial_packet_header_t) + packet.len - 1, encoded_packet);
-
-    // Send to PC
-    fwrite(encoded_packet, encoded_len, 1, stdout);
-    fflush(stdout);
   }
 }

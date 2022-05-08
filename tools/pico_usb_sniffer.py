@@ -4,9 +4,9 @@
 # References:
 #   LibpcapFileFormat, https://wiki.wireshark.org/Development/LibpcapFileFormat
 #   Link-layer header types, https://www.tcpdump.org/linktypes.html
+#   USB 2.0 Specification, https://www.usb.org/document-library/usb-20-specification
 
 import struct
-import time
 import serial
 import sliplib
 
@@ -130,6 +130,43 @@ class SerialPacketHeader:
         return cls.unpack_from(buffer)
 
 
+SERIAL_CMD_TYPE_SET_PID_FILTER = 2
+
+class SetPidFilterCommand:
+    # Create a precompiled struct format as a class variable
+    struct = struct.Struct('<BH')
+
+    def __init__(self, pid_ignore_flags):
+        self.type = SERIAL_CMD_TYPE_SET_PID_FILTER
+        self.pid_ignore_flags = pid_ignore_flags
+    
+
+    def pack(self):
+        return self.struct.pack(self.type, self.pid_ignore_flags)
+
+
+    @classmethod
+    def unpack_from(cls, buffer, offset=0):
+        type, pid_ignore_flags = cls.struct.unpack_from(buffer, offset)
+        assert type == SERIAL_CMD_TYPE_SET_PID_FILTER
+
+        return cls(type, pid_ignore_flags)
+
+
+    @classmethod
+    def unpack(cls, buffer):
+        return cls.unpack_from(buffer)
+
+
+# USB Packet Identifiers (PIDs)
+# PIDs exclusive for High Speed mode are not included.
+# Unlike actual order in USB signals, numbers are MSB first here.
+USB_PIDS = {
+    'OUT': 0b0001, 'IN': 0b1001, 'SOF': 0b0101, 'SETUP': 0b1101,
+    'DATA0': 0b0011, 'DATA1': 0b1011, 'ACK': 0b0010, 'NAK': 0b1010,
+    'STALL': 0b1110, 'PRE': 0b1100
+}
+
 class Sniffer:
     def __init__(self, port_name, out_path):
         # Baudrate has no meaning because it is a virtual serial port on USB
@@ -171,9 +208,19 @@ class Sniffer:
                 header = SerialPacketHeader.unpack_from(packet, 0)
                 data = packet[SerialPacketHeader.struct.size:]
                 self.pcap_file.write_packet(header.timestamp, data)
+    
+
+    def set_pid_filter(self, pids_to_ignore):
+        flags = 0
+        for pid in pids_to_ignore:
+            flags |= (1 << pid)
+        
+        cmd = SetPidFilterCommand(flags)
+        self.slip_stream.send_msg(cmd.pack())
 
 
 if __name__ == '__main__':
     import sys
     with Sniffer('COM6', 'test.pcap') as sniffer:
+        sniffer.set_pid_filter({USB_PIDS['SOF'], USB_PIDS['NAK'], USB_PIDS['ACK']})
         sniffer.capture()

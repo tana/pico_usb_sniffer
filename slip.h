@@ -18,3 +18,8 @@
 // Length of output array must be at least SLIP_MAX_ENCODED_LEN(input_len).
 // Returns actual length of output.
 size_t slip_encode(const uint8_t *input, size_t input_len, uint8_t *output);
+
+// Decode SLIP-encoded bytes
+// Length of output array must be same size or longer than input array.
+// Returns actual length of output.
+size_t slip_decode(const uint8_t *input, size_t input_len, uint8_t *output);
