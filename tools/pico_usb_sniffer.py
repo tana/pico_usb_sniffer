@@ -6,6 +6,7 @@
 #   Link-layer header types, https://www.tcpdump.org/linktypes.html
 #   USB 2.0 Specification, https://www.usb.org/document-library/usb-20-specification
 
+import sys
 import struct
 import serial
 import sliplib
@@ -74,7 +75,10 @@ class PcapRecordHeader:
 
 class PcapFileWriter:
     def __init__(self, path, timezone_offset=0, timestamp_accuracy=0, snapshot_len=65535, link_type=1):
-        self.stream = open(path, 'wb')
+        if path == '-':
+            self.stream = sys.stdout
+        else:
+            self.stream = open(path, 'wb')
 
         global_header = PcapGlobalHeader(timezone_offset, timestamp_accuracy, snapshot_len, link_type)
         self.stream.write(global_header.pack())
@@ -220,7 +224,23 @@ class Sniffer:
 
 
 if __name__ == '__main__':
-    import sys
-    with Sniffer('COM6', 'test.pcap') as sniffer:
-        sniffer.set_pid_filter({USB_PIDS['SOF'], USB_PIDS['NAK'], USB_PIDS['ACK']})
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('port', help='name of the serial port (e.g. COM1 on Windows or /dev/ttyACM0 on Linux).')
+    parser.add_argument(
+        '-o', '--output', default='-',
+        help='path of output file. \'-\' indicates stdout. Default is \'-\'.'
+    )
+    parser.add_argument(
+        '-i', '--ignore-pids', nargs='*',
+        choices=USB_PIDS.keys(), default={},
+        type=lambda pid: pid.upper(),    # Lower case is converted to upper case
+        help='Packet Identifiers (PIDs, e.g. SOF or ACK) to ignore. Case-insensitive.',
+        metavar='PID'
+    )
+
+    args = parser.parse_args()
+
+    with Sniffer(args.port, args.output) as sniffer:
+        sniffer.set_pid_filter({USB_PIDS[pid] for pid in args.ignore_pids})
         sniffer.capture()

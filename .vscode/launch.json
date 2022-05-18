@@ -1,0 +1,17 @@
+{
+    // IntelliSense を使用して利用可能な属性を学べます。
+    // 既存の属性の説明をホバーして表示します。
+    // 詳細情報は次を確認してください: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run sniffer tool",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/pico_usb_sniffer.py",
+            "args": ["COM6", "-o", "${workspaceFolder}/test.pcap", "-i", "ACK", "NAK", "SOF"],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}
