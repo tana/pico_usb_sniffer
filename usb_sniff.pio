@@ -63,7 +63,7 @@ k_to_k:
     jmp from_j [8]          ; (t=6) Skip the next J state which constitutes an extra stuffed bit
 k_to_j:
     ; Transition indicates 0
-    set y, 6                ; (t=0) Reset counter of consecutive 1
+    set y, 5                ; (t=0) Reset counter of consecutive 1
     in null, 1              ; (t=1) Shift 0 into the Input Shift Register (ISR)
     jmp from_j [2]          ; (t=2)
 

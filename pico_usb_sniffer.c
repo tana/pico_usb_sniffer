@@ -133,7 +133,7 @@ void core1_main()
   uint packet_start_pos = 0;
 
   while (true) {
-    while (&capture_buf[pos] != (uint32_t*)(dma_hw->ch[capture_dma_chan].write_addr)) {
+    while (pos != (((uint32_t*)(dma_hw->ch[capture_dma_chan].write_addr) - capture_buf) % CAPTURE_BUF_LEN)) {
       if (capture_buf[pos] == 0xFFFFFFFF) { // When an EOP is detected
         packet_pos_t packet_pos = {
           .start_pos = packet_start_pos,
@@ -157,19 +157,18 @@ void process_usb_packet(packet_pos_t packet)
   static uint8_t serial_packet[SERIAL_MAX_PACKET_LEN];
   static uint8_t encoded_packet[SLIP_MAX_ENCODED_LEN(SERIAL_MAX_PACKET_LEN)];
 
+  if (packet.len <= 1) {
+    gpio_put(LED_PIN, true);
+    return; // Skip invalid packet which has no content
+  }
+
   uint8_t first_byte = capture_buf[packet.start_pos] >> 24;
+  uint8_t second_byte = capture_buf[(packet.start_pos + 1) % CAPTURE_BUF_LEN] >> 24;
 
   if (first_byte != USB_SYNC) {
     gpio_put(LED_PIN, true);
     return; // Skip invalid packet which does not start with sync pattern
   }
-
-  if (packet.len == 1) {
-    gpio_put(LED_PIN, true);
-    return; // Skip invalid packet which has no content
-  }
-
-  uint8_t second_byte = capture_buf[(packet.start_pos + 1) % CAPTURE_BUF_LEN] >> 24;
 
   // First 4 bits of the second byte are bit-inversion of PID, and the rest are PID itself.
   if (((~(second_byte >> 4)) & 0xF) != (second_byte & 0xF)) {
