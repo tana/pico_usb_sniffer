@@ -13,6 +13,9 @@ Captured packets are saved as a `.pcap` file and can be analyzed using [Wireshar
 Example capture file: [logitech_uniftying.pcap](docs/logitech_unifying.pcap)
 
 ## Usage
+### Firmware
+Firmware for Raspberry Pi Pico (`.uf2` file) is available on [Releases page](https://github.com/tana/pico_usb_sniffer/releases).
+
 ### Wiring
 Connect **USB D+ to Raspberry Pi Pico's GPIO 11**, **USB D- to GPIO 12**, and **USB GND to Pico's GND**.
 
