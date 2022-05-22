@@ -10,7 +10,7 @@ Captured packets are saved as a `.pcap` file and can be analyzed using [Wireshar
 ![Implementation on a breadboard](docs/breadboard.jpg)
 
 ![Screenshot of Wireshark displaying captured packets](docs/screenshot_logitech_unifying.png)
-Example capture file: [logitech_uniftying.pcap](docs/logitech_unifying.pcap)
+Example capture file: [logitech_unifying.pcap](docs/logitech_unifying.pcap)
 
 ## Usage
 ### Firmware
@@ -41,7 +41,7 @@ optional arguments:
     - Use short cables.
     - Put a signal repeating device (e.g. an USB hub, or an isolator based on [ADuM3160](https://www.analog.com/en/products/adum3160.html#product-overview)) between the sniffer and the device under test. Dongle-shaped one or one with very short cable is the most preferable.
 - Only **Full Speed** mode is supported. Low or High Speed packets on the same bus may prevent entire capturing.
-    - The aforementioned USB isolator is also useful to force a High Speed capable DUT to use Full Speed.
+    - The aforementioned USB isolator is also useful to force a High Speed capable device to use Full Speed.
 - Because it sends captured USB Full Speed packets via USB serial port (which also uses Full Speed), **it cannot capture all packets when USB bandwidth is fully utilized**.
 
 ## Known issues
