@@ -15,8 +15,18 @@ typedef struct {
 } __attribute__((packed)) serial_packet_header_t;
 
 typedef enum {
+  SERIAL_CMD_TYPE_START_CAPTURE = 0,
+  SERIAL_CMD_TYPE_STOP_CAPTURE = 1,
   SERIAL_CMD_TYPE_SET_PID_FILTER = 2
 } serial_cmd_type_t;
+
+typedef struct {
+  uint8_t type; // One of serial_cmd_type_t
+} __attribute__((packed)) serial_start_capture_cmd_t;
+
+typedef struct {
+  uint8_t type; // One of serial_cmd_type_t
+} __attribute__((packed)) serial_stop_capture_cmd_t;
 
 typedef struct {
   uint8_t type; // One of serial_cmd_type_t

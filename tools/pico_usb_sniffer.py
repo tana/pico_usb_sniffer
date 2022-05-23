@@ -134,7 +134,59 @@ class SerialPacketHeader:
         return cls.unpack_from(buffer)
 
 
+SERIAL_CMD_TYPE_START_CAPTURE = 0
+SERIAL_CMD_TYPE_STOP_CAPTURE = 1
 SERIAL_CMD_TYPE_SET_PID_FILTER = 2
+
+class StartCaptureCommand:
+    # Create a precompiled struct format as a class variable
+    struct = struct.Struct('<B')
+
+    def __init__(self):
+        self.type = SERIAL_CMD_TYPE_START_CAPTURE
+    
+
+    def pack(self):
+        return self.struct.pack(self.type)
+
+
+    @classmethod
+    def unpack_from(cls, buffer, offset=0):
+        type = cls.struct.unpack_from(buffer, offset)
+        assert type == SERIAL_CMD_TYPE_START_CAPTURE
+
+        return cls(type)
+
+
+    @classmethod
+    def unpack(cls, buffer):
+        return cls.unpack_from(buffer)
+
+
+class StopCaptureCommand:
+    # Create a precompiled struct format as a class variable
+    struct = struct.Struct('<B')
+
+    def __init__(self):
+        self.type = SERIAL_CMD_TYPE_STOP_CAPTURE
+    
+
+    def pack(self):
+        return self.struct.pack(self.type)
+
+
+    @classmethod
+    def unpack_from(cls, buffer, offset=0):
+        type = cls.struct.unpack_from(buffer, offset)
+        assert type == SERIAL_CMD_TYPE_STOP_CAPTURE
+
+        return cls(type)
+
+
+    @classmethod
+    def unpack(cls, buffer):
+        return cls.unpack_from(buffer)
+
 
 class SetPidFilterCommand:
     # Create a precompiled struct format as a class variable
@@ -201,18 +253,31 @@ class Sniffer:
     
 
     def capture(self):
-        while True:
-            packet = self.slip_stream.recv_msg()
+        self.start_capture()
 
-            if len(packet) < 1:
-                continue    # Wrong packet received from serial port (no packet type)
+        try:
+            while True:
+                packet = self.slip_stream.recv_msg()
 
-            packet_type = packet[0]
-            if packet_type == SERIAL_PACKET_TYPE_USB:
-                header = SerialPacketHeader.unpack_from(packet, 0)
-                data = packet[SerialPacketHeader.struct.size:]
-                self.pcap_file.write_packet(header.timestamp, data)
+                if len(packet) < 1:
+                    continue    # Wrong packet received from serial port (no packet type)
+
+                packet_type = packet[0]
+                if packet_type == SERIAL_PACKET_TYPE_USB:
+                    header = SerialPacketHeader.unpack_from(packet, 0)
+                    data = packet[SerialPacketHeader.struct.size:]
+                    self.pcap_file.write_packet(header.timestamp, data)
+        finally:
+            self.stop_capture()
     
+    
+    def start_capture(self):
+        self.slip_stream.send_msg(StartCaptureCommand().pack())
+
+
+    def stop_capture(self):
+        self.slip_stream.send_msg(StopCaptureCommand().pack())
+
 
     def set_pid_filter(self, pids_to_ignore):
         flags = 0

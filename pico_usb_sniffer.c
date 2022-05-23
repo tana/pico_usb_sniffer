@@ -58,6 +58,9 @@ uint capture_dma_chan;
 // By default (0), no PID is ignored
 uint pid_ignore_flags = 0;
 
+// Capture is done when this flag is true
+bool capturing = false;
+
 // Called when DMA completes transfer of data whose amount is specified in its setting
 void handle_dma_complete_interrupt()
 {
@@ -87,7 +90,7 @@ void usb_sniff_program_init(PIO pio, uint sm, uint offset, uint dp_pin, uint dma
 
   pio_sm_init(pio, sm, offset, &conf);  // Initialize the state machine with the config created above
 
-  // Store DMA channel number for use in interrupt handlers
+  // Store DMA channel number for use in Core 1
   capture_dma_chan = dma_chan;
 
   // DMA configuration
@@ -204,6 +207,16 @@ void process_usb_packet(packet_pos_t packet)
   fflush(stdout);
 }
 
+void process_start_capture_cmd(const uint8_t *buf, size_t len)
+{
+  capturing = true;
+}
+
+void process_stop_capture_cmd(const uint8_t *buf, size_t len)
+{
+  capturing = false;
+}
+
 void process_set_pid_filter_cmd(const uint8_t *buf, size_t len)
 {
   if (len < sizeof(serial_set_pid_filter_cmd_t)) {
@@ -223,6 +236,12 @@ void process_received_cmd(const uint8_t *buf, size_t len)
 
   // Command type is always stored in first byte
   switch (buf[0]) {
+  case SERIAL_CMD_TYPE_START_CAPTURE:
+    process_start_capture_cmd(buf, len);
+    break;
+  case SERIAL_CMD_TYPE_STOP_CAPTURE:
+    process_stop_capture_cmd(buf, len);
+    break;
   case SERIAL_CMD_TYPE_SET_PID_FILTER:
     process_set_pid_filter_cmd(buf, len);
     break;
@@ -258,7 +277,9 @@ int main()
     packet_pos_t packet;
     // Receive a packet from Core 1
     if (queue_try_remove(&packet_queue, &packet)) {
-      process_usb_packet(packet);
+      if (capturing) {
+        process_usb_packet(packet);
+      }
     }
 
     // Handle commands sent from PC
