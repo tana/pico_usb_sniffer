@@ -114,6 +114,7 @@ class PcapFileWriter:
         
         self.stream.write(header.pack())
         self.stream.write(data)
+        self.stream.flush()
 
 
 SERIAL_PACKET_TYPE_USB = 0
