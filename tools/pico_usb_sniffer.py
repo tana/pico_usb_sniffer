@@ -10,6 +10,10 @@ import sys
 import struct
 import serial
 import sliplib
+import os
+import signal
+from threading import Thread, Event
+from queue import Queue, Empty
 
 PCAP_LINKTYPE_USB_2_0 = 288
 
@@ -76,7 +80,7 @@ class PcapRecordHeader:
 class PcapFileWriter:
     def __init__(self, path, timezone_offset=0, timestamp_accuracy=0, snapshot_len=65535, link_type=1):
         if path == '-':
-            self.stream = sys.stdout
+            self.stream = sys.stdout.buffer  # Use stdout.buffer for binary mode
         else:
             self.stream = open(path, 'wb')
 
@@ -223,21 +227,90 @@ USB_PIDS = {
     'STALL': 0b1110, 'PRE': 0b1100
 }
 
+# Class for streaming PCAP data to a named pipe for real-time capture viewing.
+class PipeStreamer:
+    def __init__(self, pipe_path, packet_queue):
+        # Create a precompiled struct format as a class variable
+        self.pipe_path = pipe_path
+        self.packet_queue = packet_queue
+        self.stop_event = Event()
+        
+    def start(self):
+        # Create named pipe if it doesn't exist
+        if not os.path.exists(self.pipe_path):
+            os.mkfifo(self.pipe_path)
+        
+        print(f"Created named pipe at {self.pipe_path}")
+        print(f"To capture in Wireshark, run: wireshark -k -i {self.pipe_path}")
+        
+        # Start packet streaming in a separate thread
+        self.stream_thread = Thread(target=self._stream_packets)
+        self.stream_thread.daemon = True
+        self.stream_thread.start()
+
+    def _stream_packets(self):
+        # Write packets to named pipe
+        try:
+            with open(self.pipe_path, 'wb') as pipe:
+                # Write PCAP global header
+                global_header = PcapGlobalHeader(network=PCAP_LINKTYPE_USB_2_0)
+                pipe.write(global_header.pack())
+                pipe.flush()
+                
+                # Stream packets until stopped
+                while not self.stop_event.is_set():
+                    try:
+                        packet = self.packet_queue.get(timeout=1.0)
+                        pipe.write(packet)
+                        pipe.flush()
+                    except Empty:
+                        continue
+                    except IOError as e:
+                        if not self.stop_event.is_set():
+                            print(f"Pipe write error: {e}")
+                            break
+        except Exception as e:
+            if not self.stop_event.is_set():
+                print(f"Pipe error: {e}")
+                
+    def stop(self):
+        # Stop streaming and clean up resources
+        self.stop_event.set()
+        if os.path.exists(self.pipe_path):
+            try:
+                os.unlink(self.pipe_path)
+            except OSError as e:
+                print(f"Error removing pipe: {e}")
+
+
 class Sniffer:
-    def __init__(self, port_name, out_path):
+    def __init__(self, port_name, out_path=None, pipe_path=None):
         # Baudrate has no meaning because it is a virtual serial port on USB
         # Serial port must not have timeout, because SlipStream treats 0-length bytes from stream as the end of stream.
         # (See: https://sliplib.readthedocs.io/en/master/module.html#slipwrapper )
         # It still allows interrupting by Ctrl-C because SlipStream seems to use another thread for receiving.
         self.serial = serial.Serial(port_name)
         self.slip_stream = sliplib.SlipStream(self.serial, chunk_size=1)
+        self.stop_event = Event()
 
-        self.pcap_file = PcapFileWriter(out_path, link_type=PCAP_LINKTYPE_USB_2_0)
-    
+        self.pcap_file = None
+        if out_path:
+            self.pcap_file = PcapFileWriter(out_path, link_type=PCAP_LINKTYPE_USB_2_0)
+            
+        # Initialize pipe streaming if path provided
+        self.packet_queue = Queue()
+        self.pipe_streamer = None
+        if pipe_path:
+            self.pipe_streamer = PipeStreamer(pipe_path, self.packet_queue)
     
     # Release resources
     def close(self):
-        self.pcap_file.close()
+        # Release resources
+        self.stop_event.set()
+        if self.pcap_file:
+            self.pcap_file.close()
+        if self.pipe_streamer:
+            self.pipe_streamer.stop()
         self.serial.close()
     
 
@@ -253,12 +326,21 @@ class Sniffer:
     
 
     def capture(self):
+        def signal_handler(signum, frame):
+            self.stop_event.set()
+
+        # Set up signal handlers for graceful shutdown
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        if self.pipe_streamer:
+            self.pipe_streamer.start()
+            
         self.start_capture()
 
         try:
-            while True:
+            while not self.stop_event.is_set():
                 packet = self.slip_stream.recv_msg()
-
                 if len(packet) < 1:
                     continue    # Wrong packet received from serial port (no packet type)
 
@@ -266,7 +348,20 @@ class Sniffer:
                 if packet_type == SERIAL_PACKET_TYPE_USB:
                     header = SerialPacketHeader.unpack_from(packet, 0)
                     data = packet[SerialPacketHeader.struct.size:]
-                    self.pcap_file.write_packet(header.timestamp, data)
+                    
+                    # Create PCAP record for pipe
+                    if self.pipe_streamer:
+                        pcap_header = PcapRecordHeader(
+                            header.timestamp // 1_000_000,
+                            header.timestamp % 1_000_000,
+                            len(data),
+                            len(data)
+                        )
+                        self.packet_queue.put(pcap_header.pack() + data)
+                    
+                    # Write to file if enabled
+                    if self.pcap_file:
+                        self.pcap_file.write_packet(header.timestamp, data)
         finally:
             self.stop_capture()
     
@@ -293,19 +388,25 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('port', help='name of the serial port (e.g. COM1 on Windows or /dev/ttyACM0 on Linux).')
     parser.add_argument(
-        '-o', '--output', default='-',
-        help='path of output file. \'-\' indicates stdout. Default is \'-\'.'
+        '-o', '--output',
+        help='path of output file. \'-\' indicates stdout.'
+    )
+    # Add pipe output option
+    parser.add_argument(
+        '--pipe',
+        help='path for named pipe to stream capture data (e.g. /tmp/usb_capture)'
     )
     parser.add_argument(
         '-i', '--ignore-pids', nargs='*',
-        choices=USB_PIDS.keys(), default={},
-        type=lambda pid: pid.upper(),    # Lower case is converted to upper case
+        choices=USB_PIDS.keys(), default=set(),
+        type=lambda pid: pid.upper(),
         help='Packet Identifiers (PIDs, e.g. SOF or ACK) to ignore. Case-insensitive.',
         metavar='PID'
     )
 
     args = parser.parse_args()
 
-    with Sniffer(args.port, args.output) as sniffer:
-        sniffer.set_pid_filter({USB_PIDS[pid] for pid in args.ignore_pids})
+    with Sniffer(args.port, args.output, args.pipe) as sniffer:
+        pid_values = {USB_PIDS[pid] for pid in args.ignore_pids}
+        sniffer.set_pid_filter(pid_values)
         sniffer.capture()
